@@ -6,27 +6,24 @@
 import { GoogleGenAI, Type, Chat, GenerateContentResponse } from "@google/genai";
 import { marked, Tokens } from "marked";
 
+// --- GLOBAL STATE & INSTANCES ---
 const app = document.getElementById("app") as HTMLDivElement;
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+let aiInstance: GoogleGenAI | null = null;
 
-// --- CONFIGURE MARKED ---
-// Override the default link renderer to open links in a new tab.
-// The type definitions for `marked.use()` expect a token-based renderer,
-// which takes a single `token` object as an argument. The previous
-// implementation used an outdated signature. This new implementation
-// correctly uses the token object to construct the link.
+// --- MARKED CONFIGURATION ---
 marked.use({
   renderer: {
-    link: (token: Tokens.Link): string => {
+    // Use a regular function to get the correct `this` context from the renderer
+    link(this: any, token: Tokens.Link): string {
       const titleAttr = token.title ? ` title="${token.title}"` : '';
-      // `marked.parseInline` is used to render any markdown within the link text itself (e.g., bold or italics).
-      const text = marked.parseInline(token.text);
+      // Use the renderer's parser to correctly handle nested markdown (like bold/italics) inside the link text.
+      const text = this.parser.parseInline(token.tokens);
       return `<a href="${token.href}"${titleAttr} target="_blank" rel="noopener noreferrer">${text}</a>`;
     },
   },
 });
 
-
+// --- TYPE DEFINITIONS ---
 type View = "welcome" | "results" | "project";
 
 interface ProjectIdea {
@@ -81,6 +78,58 @@ function setState(newState: Partial<AppState>) {
   render();
 }
 
+// --- API KEY MANAGEMENT ---
+function getApiKeyFromStorage(): string | null {
+  return localStorage.getItem('gemini-api-key');
+}
+
+function saveApiKeyToStorage(key: string) {
+  localStorage.setItem('gemini-api-key', key);
+}
+
+function clearApiKeyFromStorage() {
+  localStorage.removeItem('gemini-api-key');
+}
+
+function showApiKeyModal(visible: boolean) {
+  const modal = document.getElementById('api-key-modal') as HTMLDivElement;
+  if (modal) {
+    modal.style.display = visible ? 'flex' : 'none';
+  }
+}
+
+function updateUiForApiKeyStatus(isKeySet: boolean) {
+  const changeBtn = document.getElementById('change-api-key-btn') as HTMLButtonElement;
+  if (changeBtn) {
+    changeBtn.style.display = isKeySet ? 'block' : 'none';
+  }
+}
+
+function initializeAi(apiKey: string) {
+  try {
+    aiInstance = new GoogleGenAI({ apiKey });
+    saveApiKeyToStorage(apiKey);
+    showApiKeyModal(false);
+    updateUiForApiKeyStatus(true);
+    if (state.view === 'welcome') {
+      renderWelcome(); // Re-render to update button state
+    }
+  } catch (error) {
+    console.error("Failed to initialize GoogleGenAI:", error);
+    clearApiKeyFromStorage();
+    aiInstance = null;
+    showApiKeyModal(true);
+    updateUiForApiKeyStatus(false);
+    // Use setState to render the error message
+    setState({
+      error: `Failed to initialize with the provided API key. It may be invalid. ${(error as Error).message}`,
+      isLoading: false,
+    });
+  }
+}
+
+
+// --- RENDER FUNCTIONS ---
 function renderLoading() {
   return `<div class="loader-container"><div class="loader"></div></div>`;
 }
@@ -90,7 +139,6 @@ function renderError() {
   return `<div class="error-message" role="alert"><strong>Error:</strong> ${state.error}</div>`;
 }
 
-// ---- WELCOME VIEW ----
 function renderWelcome() {
   app.innerHTML = `
     <div class="app-container">
@@ -103,8 +151,8 @@ function renderWelcome() {
           <main>
             <form id="topic-form">
               <label for="topic-input" class="sr-only">Enter your topic</label>
-              <input type="text" id="topic-input" name="topic" placeholder="Topic (e.g. physics, chemistry, biology)" required />
-              <button type="submit">Brainstorm Projects</button>
+              <input type="text" id="topic-input" name="topic" placeholder="e.g., 'Real-time holographic communication'" required />
+              <button type="submit" ${!aiInstance ? 'disabled title="Please set your API key first."' : ''}>Brainstorm Projects</button>
             </form>
              <div class="divider">or</div>
             <button type="button" id="load-btn" class="secondary-button">Load Saved Projects</button>
@@ -124,8 +172,6 @@ function renderWelcome() {
   document.getElementById("load-input")?.addEventListener("change", handleLoadFile);
 }
 
-
-// ---- RESULTS VIEW ----
 async function renderResults() {
   const projectsHtml = await Promise.all(
     state.projects.map(async (project) => `
@@ -222,7 +268,6 @@ async function renderResults() {
   });
 }
 
-// ---- PROJECT VIEW ----
 async function renderProject() {
   if (!state.selectedProject) return;
 
@@ -322,7 +367,6 @@ function handleLoadFile(event: Event) {
       const result = e.target?.result as string;
       const data = JSON.parse(result);
       
-      // Validate the loaded data
       if (data.topic && data.subtopics && Array.isArray(data.projects)) {
         setState({
           view: 'results',
@@ -353,6 +397,12 @@ function handleLoadFile(event: Event) {
 
 async function handleTopicSubmit(event: Event) {
   event.preventDefault();
+  if (!aiInstance) {
+    setState({ error: "API Key is not configured. Please enter your key to continue." });
+    showApiKeyModal(true);
+    return;
+  }
+
   const form = event.target as HTMLFormElement;
   const formData = new FormData(form);
   const topic = formData.get("topic") as string;
@@ -421,7 +471,7 @@ Your response MUST follow this exact markdown structure, with "---" as a separat
 Use Google Search extensively to find up-to-date, cutting-edge information to ensure your suggestions and analysis are well-grounded and truly innovative.`;
 
   try {
-    const response = await ai.models.generateContent({
+    const response = await aiInstance.models.generateContent({
       model: "gemini-2.5-flash",
       contents: prompt,
       config: {
@@ -467,14 +517,13 @@ Use Google Search extensively to find up-to-date, cutting-edge information to en
         wowFactor,
         resourcesHtml: resourcesMatch ? resourcesMatch[1].trim() : "",
       };
-    }).filter(p => p.title !== 'Untitled'); // Filter out any empty trailing parts
+    }).filter(p => p.title !== 'Untitled');
 
     const groundingMetadata = response.candidates?.[0]?.groundingMetadata;
     const sources = groundingMetadata?.groundingChunks
       ?.map(c => c.web)
       .filter(w => w?.uri) as { uri: string, title: string }[] || [];
     
-    // Remove duplicates
     const uniqueSources = Array.from(new Map(sources.map(s => [s.uri, s])).values());
 
     setState({
@@ -492,6 +541,12 @@ Use Google Search extensively to find up-to-date, cutting-edge information to en
 }
 
 async function handleProjectSelect(project: ProjectIdea) {
+  if (!aiInstance) {
+    setState({ error: "API Key is not configured.", view: "welcome" });
+    showApiKeyModal(true);
+    return;
+  }
+  
   setState({
     view: "project",
     isLoading: true,
@@ -503,7 +558,7 @@ async function handleProjectSelect(project: ProjectIdea) {
   });
 
   try {
-    const chat = ai.chats.create({
+    const chat = aiInstance.chats.create({
       model: "gemini-2.5-flash",
       config: {
         systemInstruction: `You are a helpful science fair project advisor. You are answering questions about the following project.
@@ -513,7 +568,7 @@ async function handleProjectSelect(project: ProjectIdea) {
       },
     });
 
-    const response = await ai.models.generateContent({
+    const response = await aiInstance.models.generateContent({
       model: "gemini-2.5-flash",
       contents: `Create a detailed, step-by-step project timeline for a science fair project titled "${project.title}".
       The timeline should be broken down into logical phases (like 'Research', 'Data Collection', 'Development', 'Analysis', 'Final Presentation').
@@ -557,7 +612,7 @@ async function handleProjectSelect(project: ProjectIdea) {
     setState({
       isLoading: false,
       error: `Failed to generate timeline. ${(err as Error).message}`,
-      view: 'results' // Go back if it fails
+      view: 'results'
     });
   }
 }
@@ -575,7 +630,6 @@ async function handleChatSubmit(event: Event) {
     chatHistory: [...state.chatHistory, { role: "user", content: message }],
   });
   
-  // Add an empty model message to stream into
   setState({
     chatHistory: [...state.chatHistory, { role: "model", content: "" }]
   });
@@ -588,7 +642,7 @@ async function handleChatSubmit(event: Event) {
       const lastMessageIndex = state.chatHistory.length - 1;
       const updatedHistory = [...state.chatHistory];
       updatedHistory[lastMessageIndex] = { role: "model", content: fullResponse };
-      setState({ chatHistory: updatedHistory }); // Re-render on each chunk
+      setState({ chatHistory: updatedHistory });
     }
   } catch (err) {
     console.error(err);
@@ -600,7 +654,6 @@ async function handleChatSubmit(event: Event) {
     setState({ isLoading: false });
   }
 }
-
 
 // ---- MAIN RENDER FUNCTION ----
 function render() {
@@ -617,5 +670,40 @@ function render() {
   }
 }
 
-// Initial render
-render();
+// --- APP INITIALIZATION ---
+
+function handleApiKeyFormSubmit(event: Event) {
+  event.preventDefault();
+  const input = document.getElementById('api-key-input') as HTMLInputElement;
+  const apiKey = input.value.trim();
+  if (apiKey) {
+    initializeAi(apiKey);
+    setState({ error: null });
+  }
+}
+
+function handleClearApiKey() {
+  clearApiKeyFromStorage();
+  aiInstance = null;
+  updateUiForApiKeyStatus(false);
+  showApiKeyModal(true);
+  if (state.view === 'welcome') {
+    renderWelcome();
+  }
+}
+
+function initializeApp() {
+  document.getElementById('api-key-form')?.addEventListener('submit', handleApiKeyFormSubmit);
+  document.getElementById('change-api-key-btn')?.addEventListener('click', handleClearApiKey);
+
+  const storedKey = getApiKeyFromStorage();
+  if (storedKey) {
+    initializeAi(storedKey);
+  } else {
+    showApiKeyModal(true);
+    updateUiForApiKeyStatus(false);
+  }
+  render();
+}
+
+initializeApp();
