@@ -35,15 +35,21 @@ jobs:
           cache: 'npm'
       - name: Install dependencies
         run: npm install
+
+      # --- THIS IS THE FIX ---
+      # Add execute permission to the vite executable
+      - name: Make vite executable
+        run: chmod +x ./node_modules/.bin/vite
+
       - name: Build
-        run: npm run build
+        run: npm run build # This will now have permission to run
       - name: Setup Pages
         uses: actions/configure-pages@v4
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          # This should be the path to your build output directory
-          path: './dist' 
+          path: './dist'
+
 
   # Deployment job
   deploy:
