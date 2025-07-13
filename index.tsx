@@ -152,7 +152,7 @@ function renderWelcome() {
           <main>
             <form id="topic-form">
               <label for="topic-input" class="sr-only">Enter your topic</label>
-              <input type="text" id="topic-input" name="topic" placeholder="e.g., 'Real-time holographic communication'" required />
+              <input type="text" id="topic-input" name="topic" placeholder="e.g., 'chemistry simulations'" required />
               <button type="submit" ${!aiInstance ? 'disabled title="Please set your API key first."' : ''}>Brainstorm Projects</button>
             </form>
              <div class="divider">or</div>
