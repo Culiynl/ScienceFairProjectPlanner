@@ -5,6 +5,7 @@
 
 import { GoogleGenAI, Type, Chat, GenerateContentResponse } from "@google/genai";
 import { marked, Tokens } from "marked";
+import firiLogoPath from '/FIRI_logo.png'; 
 
 // --- GLOBAL STATE & INSTANCES ---
 const app = document.getElementById("app") as HTMLDivElement;
@@ -145,7 +146,7 @@ function renderWelcome() {
       <div class="welcome-container">
         <div class="welcome-content-wrapper">
           <header>
-            <img src="FIRI_logo.png" alt="FIRI Logo" class="welcome-logo" />
+            <img src="${firiLogoPath}" alt="FIRI Logo" class="welcome-logo" />
             <p class="caption">Built for research</p>
           </header>
           <main>
